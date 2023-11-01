@@ -48,7 +48,7 @@ heatmap_size = [200, 160]
 num_joints = 15 # convert 15(CMU) -> 14(camppus)
 num_cameras = 3
 
-data_root = 'data/campus'
+data_root = 'data/Campus'
 train_data_cfg = dict(
     space_size=space_size,
     space_center=space_center,
@@ -84,8 +84,9 @@ train_data_cfg = dict(
     test_pose_db_file=f'{data_root}/pred_campus_maskrcnn_hrnet_coco.pkl',
     # 3D human poses, use for generating input heatmap to train 3D model
     train_pose_db_file='data/panoptic_training_pose.pkl',
+    # train_pose_db_file=f'{data_root}/actorsGT.mat',
     # 2D and 3D ground-truth poses
-    gt_pose_db_file=f'{data_root}/actorsGT.mat',
+    gt_pose_db_file=f'{data_root}/actorsGT.npy',
 )
 
 test_data_cfg = train_data_cfg.copy()
@@ -108,6 +109,7 @@ keypoint_head = dict(
 )
 
 model = dict(
+    test_with_refine=False, # do not refine
     type='GraphBasedModel',
     num_joints=num_joints,
     backbone=backbone,
@@ -296,7 +298,7 @@ val_pipeline = [
 
 test_pipeline = val_pipeline
 
-data_root = 'data/campus'
+data_root = 'data/Campus'
 data = dict(
     samples_per_gpu=1,
     workers_per_gpu=4,

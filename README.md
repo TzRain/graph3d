@@ -104,12 +104,12 @@ For example, you can train the model with 8 GPUs by using
 ```bash
 bash tools/dist_train.sh configs/body/3d_kpt_mview_rgb_img/graph_pose/panoptic/gcn_cpn80x80x20_panoptic_cam5_end2end.py 8
 ```
-To test the model with 8 GPUs, use the following
+To test the model with 1 GPUs, use the following
 ```bash
 bash tools/dist_test.sh configs/body/3d_kpt_mview_rgb_img/graph_pose/panoptic/gcn_cpn80x80x20_panoptic_cam5_end2end.py \
-path/to/checkpoint 8 --eval mpjpe mAP
+models/best_mAP_epoch_9.pth 1 --eval mpjpe mAP
 bash tools/dist_test.sh configs/body/3d_kpt_mview_rgb_img/graph_pose/panoptic/gcn_cpn80x80x20_panoptic_cam5_end2end_test_without_refinement.py \
-path/to/checkpoint 8 --eval mpjpe mAP   # test without pose refinement
+models/best_mAP_epoch_9.pth 1 --eval mpjpe mAP   # test without pose refinement
 ```
 ## Citation
 

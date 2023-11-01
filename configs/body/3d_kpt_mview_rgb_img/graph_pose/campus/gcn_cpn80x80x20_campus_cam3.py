@@ -2,6 +2,7 @@ _base_ = [
     '../../../../_base_/default_runtime.py',
     '../../../../_base_/datasets/campus.py'
 ]
+from configs._base_.datasets.campus import dataset_info #
 checkpoint_config = dict(interval=1)
 evaluation = dict(
     interval=1, metric='pcp', save_best='pcp', recall_threshold=500)
@@ -44,7 +45,8 @@ image_size = [800, 640]
 heatmap_size = [200, 160]
 
 # number of joints
-num_joints = 17
+num_joints = 15 # convert 15(CMU) -> 14(camppus)
+num_cameras = 3
 
 data_root = 'data/campus'
 train_data_cfg = dict(
@@ -56,7 +58,7 @@ train_data_cfg = dict(
     num_joints=num_joints,
     cam_list=[0, 1, 2],
     # number of cameras
-    num_cameras=3,
+    num_cameras = num_cameras,
     # The range of frame indices. In Campus, there are 2000 frames in total.
     # Frames [350 - 470] and [650 - 750] are for evaluation,  the rest frames
     # are for training.
@@ -91,30 +93,72 @@ test_data_cfg.update(
     dict(frame_range=list(range(350, 471)) + list(range(650, 751))))
 
 # model settings
+backbone = dict(type='ResNet', depth=50)
+keypoint_head = dict(
+        type='CustomDeconvHead',
+        feature_extract_layers=[5, 8],
+        in_channels=2048,
+        out_channels=num_joints,
+        num_deconv_layers=3,
+        num_deconv_filters=(256, 256, 256),
+        num_deconv_kernels=(4, 4, 4),
+        loss_keypoint=dict(
+            type='CustomHeatmapLoss',
+            loss_weight=1.0)
+)
+
 model = dict(
-    type='DetectAndRegress',
-    backbone=None,
-    keypoint_head=None,
-    pretrained=None,
+    type='GraphBasedModel',
+    num_joints=num_joints,
+    backbone=backbone,
+    freeze_keypoint_head=False,
+    freeze_2d=True,
+    keypoint_head=keypoint_head,
+    pretrained='checkpoints/resnet_50_deconv.pth.tar',
     human_detector=dict(
-        type='VoxelCenterDetector',
-        image_size=image_size,
-        heatmap_size=heatmap_size,
-        space_size=space_size,
-        cube_size=cube_size,
-        space_center=space_center,
-        center_net=dict(
-            type='V2VNet', input_channels=num_joints, output_channels=1),
-        center_head=dict(
-            type='CuboidCenterHead',
-            space_size=space_size,
-            space_center=space_center,
-            cube_size=cube_size,
-            max_num=10,
-            max_pool_kernel=3),
-        train_cfg=dict(dist_threshold=500.0),
-        test_cfg=dict(center_threshold=0.1),
-    ),
+        type='GraphCenterDetection',
+        match_cfg=dict(type='MultiViewMatchModule',
+                       feature_map_size=heatmap_size,
+                       match_gcn=dict(type='EdgeConvLayers',
+                                      node_channels=512+num_joints,
+                                      edge_channels=1,
+                                      node_out_channels=None,
+                                      edge_out_channels=1,
+                                      mid_channels=256),
+                       num_cameras=num_cameras,
+                       match_threshold=0.5,
+                       cfg_2d=dict(center_index=2,
+                                   nms_kernel=5,
+                                   val_threshold=0.3,
+                                   dist_threshold=5,
+                                   max_persons=10,
+                                   center_channel=512 + 2,
+                                   dist_coef=10),
+                       cfg_3d=dict(space_size=space_size,
+                                   space_center=space_center,
+                                   cube_size=cube_size,
+                                   dist_threshold=300)
+                       ),
+        refine_cfg=dict(type='CenterRefinementModule',
+                        project_layer=dict(feature_map_size=heatmap_size),
+                        center_gcn=dict(type='EdgeConvLayers',
+                                        node_edge_merge='add',
+                                        edge_channels=None,
+                                        edge_out_channels=None,
+                                        node_channels=512+num_joints,
+                                        node_out_channels=None,
+                                        mid_channels=256,
+                                        ),
+                        score_threshold=0.5,
+                        max_persons=10, max_pool_kernel=5,
+                        cfg_3d=dict(space_size=space_size,
+                                    space_center=space_center,
+                                    cube_size=cube_size,
+                                    search_radiance=[200],
+                                    search_step=[50])
+                        ),
+        train_cfg=dict(match_loss_weight=1.0,
+                       center_loss_weight=1.0)),
     pose_regressor=dict(
         type='VoxelSinglePose',
         image_size=image_size,
@@ -122,11 +166,47 @@ model = dict(
         sub_space_size=sub_space_size,
         sub_cube_size=sub_cube_size,
         num_joints=num_joints,
-        pose_net=dict(
-            type='V2VNet',
-            input_channels=num_joints,
-            output_channels=num_joints),
-        pose_head=dict(type='CuboidPoseHead', beta=100.0)))
+        pose_net=dict(type='V2VNet', input_channels=15, output_channels=15),
+        pose_head=dict(type='CuboidPoseHead', beta=100.0)),
+    pose_refiner=dict(type='PoseRegressionModule',
+                      pose_noise=18.0,
+                      pose_topology=dataset_info,
+                      num_joints=num_joints,
+                      num_cameras=num_cameras,
+                      feature_map_size=heatmap_size,
+                      mid_channels=512,
+                      reg_loss=dict(type='L1Loss',
+                                    use_target_weight=True, loss_weight=0.10),
+                      cls_loss=dict(type='BCELoss',
+                                    loss_weight=0.05),
+                      multiview_gcn=dict(type='EdgeConvLayers',
+                                         node_channels=512,
+                                         mid_channels=512,
+                                         node_out_channels=512,
+                                         norm_type='BN1d',
+                                         edge_channels=None,
+                                         edge_out_channels=None,
+                                         node_edge_merge='add',
+                                         node_layers=[2, 2],
+                                         edge_layers=[0, 0],
+                                         residual=True
+                                         ),
+                      pose_gcn=dict(type='EdgeConvLayers',
+                                    node_channels=512,
+                                    mid_channels=512,
+                                    node_out_channels=512,
+                                    node_edge_merge='add',
+                                    residual=True,
+                                    norm_type='BN1d',
+                                    edge_channels=None,
+                                    edge_out_channels=None,
+                                    edge_layers=[0, 0, 0, 0],
+                                    node_layers=[2, 2, 2, 2],
+                                    ),
+                      test_cfg=dict(cls_thr=0.5),
+                      space_size=space_size,
+                      space_center=space_center
+                      ))
 
 train_pipeline = [
     dict(
@@ -189,26 +269,29 @@ val_pipeline = [
     dict(
         type='MultiItemProcess',
         pipeline=[
-            dict(type='AffineJoints', item='joints'),
+            dict(type='LoadImageFromFile'),
             dict(
-                type='GenerateInputHeatmaps',
-                item='joints',
-                from_pred=True,
-                scale=1.0,
-                sigma=3,
-                base_size=96,
-                target_type='gaussian'),
+                type='BottomUpRandomAffine',
+                rot_factor=0,
+                scale_factor=[1.0, 1.0],
+                scale_type='long',
+                trans_factor=0),
+            dict(type='ToTensor'),
+            dict(
+                type='NormalizeTensor',
+                mean=[0.485, 0.456, 0.406],
+                std=[0.229, 0.224, 0.225]),
         ]),
     dict(
         type='DiscardDuplicatedItems',
         keys_list=[
-            'joints_3d', 'joints_3d_visible', 'joints_2d', 'joints_2d_visible',
-            'ann_info', 'sample_id'
+            'joints_3d', 'joints_3d_visible', 'ann_info', 'roots_3d',
+            'num_persons', 'sample_id'
         ]),
     dict(
         type='Collect',
-        keys=['sample_id', 'input_heatmaps'],
-        meta_keys=['sample_id', 'camera', 'center', 'scale']),
+        keys=['img'],
+        meta_keys=['sample_id', 'camera', 'center', 'scale', 'ann_info']),
 ]
 
 test_pipeline = val_pipeline
